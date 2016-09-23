@@ -9,9 +9,24 @@
 #define KPOS         0.009
 #define KWANTED      0.009
 #define WANTEDSPEED  -500
-#define K_P_STEER 	 0.4
+#define K_P_STEER    0.4
 
-int getGyroOffset(){
+float d_time, last_time;
+float segway_angle = 0;
+float segway_speed;
+float wheel_angle = 0, last_wheel_angle;
+float wheel_speed;
+float max_voltage;
+int u;
+float wanted_wheel_angle = 0;
+int first = 0;
+int powerSteer = 0;
+int light = 0;
+int leftU = 0;
+int rightU = 0;
+
+int getGyroOffset()
+{
     float offset = 0;
     int i;
     
@@ -20,35 +35,13 @@ int getGyroOffset(){
     return (offset/100);
 }
 
-task main(){
-
-    float d_time, last_time;
-    float segway_angle = 0;
-    float segway_speed;
-    float wheel_angle = 0, last_wheel_angle;
-    float wheel_speed;
-    float max_voltage;
-    int u;
-    float wanted_wheel_angle = 0;
-    int first = 0;
-    int powerSteer = 0;
-    int light = 0;
-    int leftU = 0;
-    int rightU = 0;
-
-    SetSensorLight(S2);
-    SetSensorHTGyro(GYRO_PORT);
-    Wait(2000);
-    float gyro_offset = getGyroOffset();
-    NumOut(0,0,gyro_offset);
-    Wait(3000);
-    ClearScreen();
-    
-    first = Sensor(S2);
-    last_time = CurrentTick();
-    while(wanted_wheel_angle < 5000) {
-
-        max_voltage = BatteryLevel() / 1000;
+void findLine(int & first, int & gyro_offset) 
+{
+	int lineSpeed = -300;
+	float k_p = 0.09;
+	int i = 0;
+	while(i <= 5) {
+		max_voltage = BatteryLevel() / 1000;
         light = Sensor(S2);
         
         d_time = (CurrentTick() - last_time) / 1000;
@@ -59,18 +52,80 @@ task main(){
         last_wheel_angle = wheel_angle;
         wheel_angle = (MotorRotationCount(LEFT_MOTOR) + MotorRotationCount(RIGHT_MOTOR)) / 2;
         wheel_speed = (wheel_angle - last_wheel_angle) / d_time;
+        wanted_wheel_angle = wanted_wheel_angle + lineSpeed * d_time;
+        
+	u = KGYROANGLE * segway_angle +
+            KSPEED * (wheel_speed - lineSpeed) +
+            KGYROSPEED * segway_speed +
+            KPOS * (wheel_angle - wanted_wheel_angle) + 
+            KWANTED * lineSpeed;  
+
+        powerSteer = k_p * (light - first);
+        if (abs(light - first) == 2) i = i + 1;
+
+        leftU = u - powerSteer;
+        rightU = u + powerSteer;
+
+        leftU = leftU * 100 / max_voltage;
+        if (abs(leftU) > 100) leftU = sign(leftU) * 100;
+
+        rightU = rightU * 100 / max_voltage;
+        if (abs(rightU) > 100) rightU = sign(rightU) * 100;
+
+
+        OnFwd(LEFT_MOTOR, leftU);
+        OnFwd(RIGHT_MOTOR, rightU);
+        last_time = CurrentTick();
+        Wait(WAIT_TIME);
+	}
+}
+
+task main()
+{
+    // Load sensors
+    SetSensorLight(S2);
+    SetSensorHTGyro(GYRO_PORT);
+    SetSensorLowspeed(S3);
+    Wait(2000);
+
+    float gyro_offset = getGyroOffset();
+    // NumOut(0,0,gyro_offset);
+    // ClearScreen();
+    PlayTone(400, 1000);
+    Wait(5000);
+    first = Sensor(S2);
+    PlayTone(400, 1000);
+    Wait(3000);
+    PlayTone(400, 1000);
+    Wait(1000);
+
+    last_time = CurrentTick();
+    findLine(first, gyro_offset);
+    last_time = CurrentTick();
+    while(wanted_wheel_angle < 5000) {
+
+        max_voltage = BatteryLevel() / 1000;
+        light = Sensor(S2);
+        
+        d_time = (CurrentTick() - last_time) / 1000;
+        segway_speed = (SensorHTGyro(GYRO_PORT) - gyro_offset);
+        segway_angle += segway_speed * d_time;
+
+        last_wheel_angle = wheel_angle;
+        wheel_angle = (MotorRotationCount(LEFT_MOTOR) + MotorRotationCount(RIGHT_MOTOR)) / 2;
+        wheel_speed = (wheel_angle - last_wheel_angle) / d_time;
         wanted_wheel_angle = wanted_wheel_angle + WANTEDSPEED * d_time;
         
-       /*u = KGYROANGLE * segway_angle +
+       u = KGYROANGLE * segway_angle +
             KSPEED * (wheel_speed - WANTEDSPEED) +
             KGYROSPEED * segway_speed +
             KPOS * (wheel_angle - wanted_wheel_angle) + 
-            KWANTED * WANTEDSPEED; */
+            KWANTED * WANTEDSPEED; 
         
-       u = KGYROANGLE * segway_angle +
+       /*u = KGYROANGLE * segway_angle +
             KSPEED * (wheel_speed) +
             KGYROSPEED * segway_speed +
-            KPOS * (wheel_angle - wanted_wheel_angle);
+            KPOS * (wheel_angle - wanted_wheel_angle);*/
 
         powerSteer = K_P_STEER * (light - first);
         
@@ -87,6 +142,7 @@ task main(){
         OnFwd(LEFT_MOTOR, leftU);
         OnFwd(RIGHT_MOTOR, rightU);
         last_time = CurrentTick();
+		//NumOut(0,0, light);
         Wait(WAIT_TIME);
         ClearScreen();
     }
