@@ -2,7 +2,7 @@
 #define LEFT_MOTOR   OUT_C
 #define RIGHT_MOTOR  OUT_B
 #define BOTH_MOTORS  OUT_BC
-#define WAIT_TIME    10.0
+#define WAIT_TIME    7.0
 #define KGYROANGLE   0.681
 #define KSPEED       0.016
 #define KGYROSPEED   0.092
@@ -24,6 +24,9 @@ int powerSteer = 0;
 int light = 0;
 int leftU = 0;
 int rightU = 0;
+float gyro_offset;
+
+int distance;
 
 int getGyroOffset()
 {
@@ -40,6 +43,7 @@ void findLine(int & first, int & gyro_offset)
 	int lineSpeed = -300;
 	float k_p = 0.09;
 	int i = 0;
+    last_time = CurrentTick()-WAIT_TIME;
 	while(i <= 5) {
 		max_voltage = BatteryLevel() / 1000;
         light = Sensor(S2);
@@ -54,11 +58,11 @@ void findLine(int & first, int & gyro_offset)
         wheel_speed = (wheel_angle - last_wheel_angle) / d_time;
         wanted_wheel_angle = wanted_wheel_angle + lineSpeed * d_time;
         
-	u = KGYROANGLE * segway_angle +
+	    u = KGYROANGLE * segway_angle +
             KSPEED * (wheel_speed - lineSpeed) +
             KGYROSPEED * segway_speed +
-            KPOS * (wheel_angle - wanted_wheel_angle) + 
-            KWANTED * lineSpeed;  
+            KPOS * (wheel_angle - wanted_wheel_angle) +
+            KWANTED * lineSpeed;
 
         powerSteer = k_p * (light - first);
         if (abs(light - first) == 2) i = i + 1;
@@ -80,34 +84,24 @@ void findLine(int & first, int & gyro_offset)
 	}
 }
 
-task main()
-{
+
+task us(){
+    SetSensorLowspeed(S4);
+    while(true){
+        distance = SensorUS(S4);
+    }
+}
+
+task go(){
     // Load sensors
-    SetSensorLight(S2);
-    SetSensorHTGyro(GYRO_PORT);
-    SetSensorLowspeed(S3);
-    Wait(2000);
-
-    float gyro_offset = getGyroOffset();
-    // NumOut(0,0,gyro_offset);
-    // ClearScreen();
-    PlayTone(400, 1000);
-    Wait(5000);
-    first = Sensor(S2);
-    PlayTone(400, 1000);
-    Wait(3000);
-    PlayTone(400, 1000);
-    Wait(1000);
-
-    last_time = CurrentTick();
-    findLine(first, gyro_offset);
-    last_time = CurrentTick();
-    while(wanted_wheel_angle < 5000) {
+    last_time = CurrentTick()-WAIT_TIME;
+    while(wanted_wheel_angle < 10000){
 
         max_voltage = BatteryLevel() / 1000;
         light = Sensor(S2);
         
         d_time = (CurrentTick() - last_time) / 1000;
+        last_time = CurrentTick();
         segway_speed = (SensorHTGyro(GYRO_PORT) - gyro_offset);
         segway_angle += segway_speed * d_time;
 
@@ -116,11 +110,11 @@ task main()
         wheel_speed = (wheel_angle - last_wheel_angle) / d_time;
         wanted_wheel_angle = wanted_wheel_angle + WANTEDSPEED * d_time;
         
-       u = KGYROANGLE * segway_angle +
+        u =  KGYROANGLE * segway_angle +
             KSPEED * (wheel_speed - WANTEDSPEED) +
             KGYROSPEED * segway_speed +
             KPOS * (wheel_angle - wanted_wheel_angle) + 
-            KWANTED * WANTEDSPEED; 
+            KWANTED * WANTEDSPEED;
         
        /*u = KGYROANGLE * segway_angle +
             KSPEED * (wheel_speed) +
@@ -141,9 +135,39 @@ task main()
 
         OnFwd(LEFT_MOTOR, leftU);
         OnFwd(RIGHT_MOTOR, rightU);
-        last_time = CurrentTick();
-		//NumOut(0,0, light);
+
+        //str = NumToStr(d_time)+" "+NumToStr(distance);
+        //WriteLnString(handle, str, str_size);
         Wait(WAIT_TIME);
         ClearScreen();
     }
+}
+
+task main()
+{
+    SetSensorLight(S2);
+    SetSensorHTGyro(GYRO_PORT);
+    SetSensorLowspeed(S3);
+
+    /*/byte handle;
+    string str;
+    int str_size;
+    DeleteFile("mount_us.txt");
+    CreateFile("mount_us.txt", 10000, handle);*/
+    Wait(2000);
+
+    gyro_offset = getGyroOffset();
+    // NumOut(0,0,gyro_offset);
+    // ClearScreen();
+    PlayTone(400, 1000);
+    Wait(5000);
+    first = Sensor(S2);
+    PlayTone(400, 1000);
+    Wait(3000);
+    PlayTone(400, 1000);
+    Wait(1000);
+
+    findLine(first, gyro_offset);
+
+    Precedes(go, us);
 }
