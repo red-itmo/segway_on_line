@@ -25,6 +25,12 @@ int light = 0;
 int leftU = 0;
 int rightU = 0;
 float gyro_offset;
+float dist_crit;
+mutex dist_mutex;
+
+byte handle;
+string str;
+int str_size;
 
 int distance;
 
@@ -43,12 +49,15 @@ void findLine(int & first, int & gyro_offset)
 	int lineSpeed = -300;
 	float k_p = 0.09;
 	int i = 0;
-    last_time = CurrentTick()-WAIT_TIME;
-	while(i <= 5) {
+    last_time = CurrentTick();
+    wheel_angle = (MotorRotationCount(LEFT_MOTOR) + MotorRotationCount(RIGHT_MOTOR)) / 2;
+    Wait(WAIT_TIME);
+	while(i <= 2) {
 		max_voltage = BatteryLevel() / 1000;
         light = Sensor(S2);
         
         d_time = (CurrentTick() - last_time) / 1000;
+        last_time = CurrentTick();
         segway_speed = (SensorHTGyro(GYRO_PORT) - gyro_offset);
         segway_angle += segway_speed * d_time;
         
@@ -79,22 +88,41 @@ void findLine(int & first, int & gyro_offset)
 
         OnFwd(LEFT_MOTOR, leftU);
         OnFwd(RIGHT_MOTOR, rightU);
-        last_time = CurrentTick();
         Wait(WAIT_TIME);
 	}
+    PlayTone(400, 1000);
 }
 
 
 task us(){
     SetSensorLowspeed(S4);
+    int dists[30];
+    int i;
+    for(i = 0; i < 30; i++)
+        dists[i] = 24;
+    i = 0;
+    dist_crit = 24;
     while(true){
         distance = SensorUS(S4);
+        Acquire(dist_mutex);
+        dist_crit = dist_crit*30 - dists[i];
+        if(abs(distance - 24) < 10)
+            dists[i] = distance;
+        else
+            dists[i] = 24;
+        dist_crit = (dist_crit + dists[i]) / 30;
+        Release(dist_mutex);
+        i = (i+1)%30;
     }
 }
 
 task go(){
     // Load sensors
-    last_time = CurrentTick()-WAIT_TIME;
+    int mountain_time = 0;
+    bool mountain_in_past = false;
+    int wanted_speed = WANTEDSPEED;
+    int l_motor_angle, r_motor_angle;
+    int straight_control;
     while(wanted_wheel_angle < 10000){
 
         max_voltage = BatteryLevel() / 1000;
@@ -106,25 +134,27 @@ task go(){
         segway_angle += segway_speed * d_time;
 
         last_wheel_angle = wheel_angle;
-        wheel_angle = (MotorRotationCount(LEFT_MOTOR) + MotorRotationCount(RIGHT_MOTOR)) / 2;
+        l_motor_angle = MotorRotationCount(LEFT_MOTOR);
+        r_motor_angle = MotorRotationCount(RIGHT_MOTOR);
+        wheel_angle = (l_motor_angle + r_motor_angle) / 2;
         wheel_speed = (wheel_angle - last_wheel_angle) / d_time;
-        wanted_wheel_angle = wanted_wheel_angle + WANTEDSPEED * d_time;
+        wanted_wheel_angle = wanted_wheel_angle + wanted_speed * d_time;
         
         u =  KGYROANGLE * segway_angle +
-            KSPEED * (wheel_speed - WANTEDSPEED) +
+            KSPEED * (wheel_speed - wanted_speed) +
             KGYROSPEED * segway_speed +
             KPOS * (wheel_angle - wanted_wheel_angle) + 
-            KWANTED * WANTEDSPEED;
+            KWANTED * wanted_speed;
         
-       /*u = KGYROANGLE * segway_angle +
-            KSPEED * (wheel_speed) +
-            KGYROSPEED * segway_speed +
-            KPOS * (wheel_angle - wanted_wheel_angle);*/
 
         powerSteer = K_P_STEER * (light - first);
-        
-        leftU = u - powerSteer;
-        rightU = u + powerSteer;
+        if(!mountain_in_past){
+            straight_control = 0.1 * (l_motor_angle-r_motor_angle);
+        }
+        else
+            straight_control = 0;
+        leftU = u - powerSteer - straight_control;
+        rightU = u + powerSteer + straight_control;
 
         leftU = leftU * 100 / max_voltage;
         if (abs(leftU) > 100) leftU = sign(leftU) * 100;
@@ -136,8 +166,20 @@ task go(){
         OnFwd(LEFT_MOTOR, leftU);
         OnFwd(RIGHT_MOTOR, rightU);
 
-        //str = NumToStr(d_time)+" "+NumToStr(distance);
-        //WriteLnString(handle, str, str_size);
+        Acquire(dist_mutex);
+        if(dist_crit > 24.6){
+            wanted_speed = -150;
+            PlayTone(1000, 300);
+            mountain_time = CurrentTick();
+        }
+        if((dist_crit < 24.0) && !mountain_in_past && (mountain_time != 0) && (CurrentTick() - mountain_time > 5000)){
+            wanted_speed = WANTEDSPEED;
+            mountain_in_past = true;
+            PlayTone(400, 300);
+        }
+        Release(dist_mutex);
+        str = NumToStr(MotorRotationCount(LEFT_MOTOR)) + " " + NumToStr(MotorRotationCount(RIGHT_MOTOR));
+        WriteLnString(handle, str, str_size);
         Wait(WAIT_TIME);
         ClearScreen();
     }
@@ -149,16 +191,11 @@ task main()
     SetSensorHTGyro(GYRO_PORT);
     SetSensorLowspeed(S3);
 
-    /*/byte handle;
-    string str;
-    int str_size;
     DeleteFile("mount_us.txt");
-    CreateFile("mount_us.txt", 10000, handle);*/
+    CreateFile("mount_us.txt", 20000, handle);
     Wait(2000);
 
     gyro_offset = getGyroOffset();
-    // NumOut(0,0,gyro_offset);
-    // ClearScreen();
     PlayTone(400, 1000);
     Wait(5000);
     first = Sensor(S2);
@@ -168,6 +205,5 @@ task main()
     Wait(1000);
 
     findLine(first, gyro_offset);
-
     Precedes(go, us);
 }
